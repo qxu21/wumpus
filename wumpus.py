@@ -81,6 +81,10 @@ async def build(ctx):
 			else:
 				start_at = None
 		else:
+			save[channel.id] = {
+				"message": None,
+				"finished": False
+			}
 			start_at = None
 		if not channel.permissions_for(ctx.guild.get_member(ctx.bot.user.id)).read_messages:
 			continue
