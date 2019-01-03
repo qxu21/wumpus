@@ -99,7 +99,7 @@ async def build(ctx):
 				}
 			else:
 				mem_db[user_id]["total"] += 1
-			if l[0] not in mem_db[user_id][bom]:
+			if l[0] not in mem_db[user_id]["bom"]:
 				mem_db[user_id]["bom"][l[0]] = 1
 			else:
 				mem_db[user_id]["bom"][l[0]] += 1
