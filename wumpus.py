@@ -141,7 +141,7 @@ async def dump_db(db,mem_db,guild_id):
 		#	"total": 1,
 		#	"bom": bom_array
 		#})
-		db_user = await db.users.find_one({"user_id":user_id,"guild_id"=guild_id})
+		db_user = await db.users.find_one({"user_id":user_id,"guild_id":guild_id})
 		if db_user is None:
 			bom_array = [{
 				"word": bom_word,
