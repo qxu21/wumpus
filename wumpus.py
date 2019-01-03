@@ -66,7 +66,7 @@ async def build(ctx):
 		save = {}
 		for channel in ctx.guild.text_channels:
 			save[channel.id] = {
-				"message": None
+				"message": None,
 				"finished": False
 			}
 		#with open(save_name, 'w') as f:
