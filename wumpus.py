@@ -7,6 +7,7 @@ import asyncio
 import random
 import psutil
 import json
+import os
 
 TOTAL_MEMORY = 1025130496 #in bytes
 
