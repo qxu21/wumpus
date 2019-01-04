@@ -155,7 +155,7 @@ async def build(ctx):
                 with open(save_name, 'w') as f:
                     json.dump(save, f)
                 this_process = psutil.Process(os.getpid())
-                if this_process.memory_info().rss >= TOTAL_MEMORY * (1/4):
+                if this_process.memory_info().rss >= TOTAL_MEMORY * (1/10): #1/10 FOR TESTING
                     await dump_db(ctx.bot.db,mem_db,ctx.guild.id)
                     with open(save_name, 'w') as f:
                         json.dump(save, f)
@@ -217,7 +217,7 @@ async def dump_db(db,mem_db,guild_id):
                     db_bom_obj["freq"] += user["bom"][db_bom_obj["word"]]
                     del user["bom"][db_bom_obj["word"]]
             #push all the new values
-            logger.info("Inserting all new words gathered for user {}".format(user.id))
+            logger.info("Inserting all new words gathered for user {}".format(user_id))
             db_bom.extend([{
                 "word": bom_word,
                 "freq": bom_freq
@@ -232,7 +232,7 @@ async def dump_db(db,mem_db,guild_id):
                 })
         del user["bom"] #gotta free that memory
         #however, the words are going to be dealt with by the user dict
-        logger.info("Preparing to store body word counts for user {}".format(user.id))
+        logger.info("Preparing to store body word counts for user {}".format(user_id))
         for word_word, word_obj in user["words"].items():
             logger.debug("Searching for word {}".format(word_word))
             word_entry = await db.words.find_one({
