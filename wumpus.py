@@ -94,7 +94,7 @@ async def build(ctx):
                 l.info("Restarting collection of channel {} named {} at message {} sent {} by {} with contents {}".format(
                     channel.id,
                     start_at.id,
-                    start_at.created_at.isoformat()
+                    start_at.created_at.isoformat(),
                     start_at.author+"#"+start_at.discrim,
                     start_at.clean_content
                     ))
