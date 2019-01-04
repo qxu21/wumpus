@@ -1,0 +1,13 @@
+{
+	"USERID": {
+		"total": 0,
+		"bom": {"WORD": "WEIGHT"}, //where weight is number of times a word begins a message
+		"words": {
+			"WORD": {
+				"total": 0,
+				"next": {"WORD": "WEIGHT"},
+				"eom_count": 0 //number of times this word ends a message
+			}
+		}
+	}
+}
