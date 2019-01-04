@@ -65,15 +65,15 @@ async def build(ctx):
     #important: each member doesn't need guildid in the mem db, but does need it attached in mongo
     #the mem db will be denormalized (embedded) to decrease in-memory footprint of the db
     #while the mongo db is normalized (flattened) so as little disk data is read as possible
-    l = logging.getLogger('discord')
-    l.info("Commanded to build on server {} named {}".format(ctx.guild.id, ctx.guild.name))
+    logger = logging.getLogger('discord')
+    logger.info("Commanded to build on server {} named {}".format(ctx.guild.id, ctx.guild.name))
     mem_db = {}
     guild_id = ctx.guild.id
     save_name = "build_saves/{}.json".format(guild_id)
     try:
         with open(save_name) as f:
             save = json.load(f)
-            l.info("Save loaded")
+            logger.info("Save loaded")
     except OSError:
         save = {}
         for channel in ctx.guild.text_channels:
@@ -81,17 +81,17 @@ async def build(ctx):
                 "message": None,
                 "finished": False
             }
-        l.info("New save object created")
+        logger.info("New save object created")
         #with open(save_name, 'w') as f:
         #    save = 
     for channel in ctx.guild.text_channels:
         if channel.id in save:
             if save[channel.id]["finished"]:
                 continue
-                l.info("Skipping channel {} named {} as it is marked finished in the save".format(channel.id, channel.name))
+                logger.info("Skipping channel {} named {} as it is marked finished in the save".format(channel.id, channel.name))
             elif save[channel.id]["message"]:
                 start_at = channel.get_message(save[channel.id]["message"])
-                l.info("Restarting collection of channel {} named {} at message {} sent {} by {} with contents {}".format(
+                logger.info("Restarting collection of channel {} named {} at message {} sent {} by {} with contents {}".format(
                     channel.id,
                     start_at.id,
                     start_at.created_at.isoformat(),
@@ -106,12 +106,12 @@ async def build(ctx):
                 "finished": False
             }
             start_at = None
-            l.info("Starting collection of channel {} named {}".format(channel.id, channel.name))
+            logger.info("Starting collection of channel {} named {}".format(channel.id, channel.name))
         if not channel.permissions_for(ctx.guild.get_member(ctx.bot.user.id)).read_messages:
             continue
         counter_until_mem_check = 10
         async for msg in channel.history(limit=None,before=start_at):
-            l.info("Working on message {} sent {}".format(msg.id, msg.created_at.isoformat()))
+            logger.info("Working on message {} sent {}".format(msg.id, msg.created_at.isoformat()))
             user_id = msg.author.id
             l = msg.clean_content.replace("derek","maya").replace("Derek","Maya").split()
             if len(l) == 0:
@@ -167,10 +167,10 @@ async def dump_db(db,mem_db,guild_id):
         #    "total": 1,
         #    "bom": bom_array
         #})
-        l = logging.getLogger("discord")
+        logger = logging.getLogger("discord")
         db_user = await db.users.find_one({"user_id":user_id,"guild_id":guild_id})
         if db_user is None:
-            l.info("User {} not found in database, assembling BOM collection and inserting".format(user_id))
+            logger.info("User {} not found in database, assembling BOM collection and inserting".format(user_id))
             bom_array = [{
                 "word": bom_word,
                 "freq": bom_freq
@@ -202,17 +202,17 @@ async def dump_db(db,mem_db,guild_id):
             # a db that grows in O(log n) time:
             # 1. walk throught the db's BOM array and increment and remove all words
             # 2. push new words to the db
-            l.info("User {} found in database, extracting BOM collection".format(user_id))
+            logger.info("User {} found in database, extracting BOM collection".format(user_id))
             db_bom = db_user["bom"]
             # update all existing values, iterating over the disk values
             for db_bom_obj in db_bom:
-                l.debug("Processing word {} from the database BOM collection".format(db_bom_obj["word"]))
+                logger.debug("Processing word {} from the database BOM collection".format(db_bom_obj["word"]))
                 if db_bom_obj["word"] in user["bom"]:
-                    l.debug("Adding stored BOM frequency of word to database BOM collection")
+                    logger.debug("Adding stored BOM frequency of word to database BOM collection")
                     db_bom_obj["freq"] += user["bom"][db_bom_obj["word"]]
                     del user["bom"][db_bom_obj["word"]]
             #push all the new values
-            l.info("Inserting all new words gathered for user {}".format(user.id))
+            logger.info("Inserting all new words gathered for user {}".format(user.id))
             db_bom.extend([{
                 "word": bom_word,
                 "freq": bom_freq
@@ -227,16 +227,16 @@ async def dump_db(db,mem_db,guild_id):
                 })
         del user["bom"] #gotta free that memory
         #however, the words are going to be dealt with by the user dict
-        l.info("Preparing to store body word counts for user {}".format(user.id))
+        logger.info("Preparing to store body word counts for user {}".format(user.id))
         for word_word, word_obj in user["words"].items():
-            l.debug("Searching for word {}".format(word_word))
+            logger.debug("Searching for word {}".format(word_word))
             word_entry = await db.words.find_one({
                 "user_id": user_id,
                 "guild_id": guild_id,
                 "word": word_word
             })
             if word_entry is None:
-                l.debug("Inserting new word document")
+                logger.debug("Inserting new word document")
                 await db.words.insert_one({
                     "user_id": user_id,
                     "guild_id": guild_id,
@@ -246,23 +246,23 @@ async def dump_db(db,mem_db,guild_id):
                     "eom_count": word_obj["eom_count"]
                 })
             else:
-                l.debug("Merging database and memory word objects")
+                logger.debug("Merging database and memory word objects")
                 #copypasting algorithm, heck this
                 db_next = word_entry["next"]
                 # update all existing values, iterating over the disk values
-                l.debug("Updating all existing values retrieved from the database")
+                logger.debug("Updating all existing values retrieved from the database")
                 for db_next_obj in db_next:
                     if db_next_obj["word"] in word_obj["next"]:
                         db_next_obj["freq"] += word_obj["next"][db_next_obj["word"]]
                         del word_obj["next"][db_next_obj["word"]]
                 #push all the new values
-                l.debug("Pushing all new values to the database object")
+                logger.debug("Pushing all new values to the database object")
                 db_next.extend([{
                     "word": next_word,
                     "freq": next_freq
                 } for next_word, next_freq in word_obj["next"].items()])
                 #update total at end
-                l.debug("Updating actual database document")
+                logger.debug("Updating actual database document")
                 await db.words.update_one({
                     "user_id": user_id,
                     "guild_id": guild_id,
