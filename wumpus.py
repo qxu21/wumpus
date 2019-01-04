@@ -27,7 +27,12 @@ class Wumpus(commands.Bot):
         super().__init__(
             command_prefix="w"
         )
-        logger = logging.getLogger('discord')
+        dlogger = logging.getLogger('discord')
+        dlogger.setLevel(logging.WARN)
+        handler = dlogging.FileHandler(filename='wumpus_dpy.log', encoding='utf-8', mode='a')
+        handler.setFormatter(logging.Formatter('%(asctime)s:%(levelname)s:%(name)s:%(lineno)d: %(message)s'))
+        dlogger.addHandler(handler)
+        logger = logging.getLogger('wumpus')
         logger.setLevel(logging.DEBUG)
         handler = logging.FileHandler(filename='wumpus.log', encoding='utf-8', mode='a')
         handler.setFormatter(logging.Formatter('%(asctime)s:%(levelname)s:%(name)s:%(lineno)d: %(message)s'))
@@ -65,7 +70,7 @@ async def build(ctx):
     #important: each member doesn't need guildid in the mem db, but does need it attached in mongo
     #the mem db will be denormalized (embedded) to decrease in-memory footprint of the db
     #while the mongo db is normalized (flattened) so as little disk data is read as possible
-    logger = logging.getLogger('discord')
+    logger = logging.getLogger('wumpus')
     logger.info("Commanded to build on server {} named {}".format(ctx.guild.id, ctx.guild.name))
     mem_db = {}
     guild_id = ctx.guild.id
@@ -167,7 +172,7 @@ async def dump_db(db,mem_db,guild_id):
         #    "total": 1,
         #    "bom": bom_array
         #})
-        logger = logging.getLogger("discord")
+        logger = logging.getLogger("wumpus")
         db_user = await db.users.find_one({"user_id":user_id,"guild_id":guild_id})
         if db_user is None:
             logger.info("User {} not found in database, assembling BOM collection and inserting".format(user_id))
