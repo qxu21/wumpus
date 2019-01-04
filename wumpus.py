@@ -29,7 +29,7 @@ class Wumpus(commands.Bot):
         )
         dlogger = logging.getLogger('discord')
         dlogger.setLevel(logging.WARN)
-        handler = dlogging.FileHandler(filename='wumpus_dpy.log', encoding='utf-8', mode='a')
+        handler = logging.FileHandler(filename='wumpus_dpy.log', encoding='utf-8', mode='a')
         handler.setFormatter(logging.Formatter('%(asctime)s:%(levelname)s:%(name)s:%(lineno)d: %(message)s'))
         dlogger.addHandler(handler)
         logger = logging.getLogger('wumpus')
