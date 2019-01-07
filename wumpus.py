@@ -1,6 +1,7 @@
 from discord.ext import commands
 #from pymongo import MongoClient
-from motor.motor_asyncio import AsyncIOMotorClient
+#from motor.motor_asyncio import AsyncIOMotorClient
+#wow two deprecated db imports
 import discord
 import wumpus_config
 import asyncio
@@ -9,16 +10,92 @@ import psutil
 import json
 import os
 import logging
+import rocksdb
+from collections import namedtuple
 
 TOTAL_MEMORY = 1025130496 #in bytes
 
 #TODO:
 #MAYBE REGEN BORING PHRASES
-#DB IDENTIFIED AS BOTTLENECK
-#ADD NEW MESSAGES TO DB
 
-# SAVE FUNCTIONALITY
-# ADD FRICKIN LOGGING
+#db key-value:
+#0x00+USERID+GUILDID - USER JSON
+# {"total":0,"bom":{"word",count}}
+#0x01+USERID+GUILDID+WORD - WORD JSON
+# {"total":0,"next":{"word",count}}, word may be None
+#all IDs stored as 8-byte arrays big-endian
+
+#op format:
+#two bytes of count, utf-8 encoded word
+
+#STOPPED ON: updating speak function for new db, do i even need total storage?
+
+Operation = namedtuple('Operation',['word','count'])
+
+def user_key(uid,gid):
+    return b'\x00' + uid.to_bytes(8,'big') + gid.to_bytes(8,'big')
+
+def word_key(uid,gid,w):
+    return b'\x01' + uid.to_bytes(8,'big') + gid.to_bytes(8,'big') + w.encode('utf-8')
+
+def decode_key(k):
+    if k[0] == b'\x00':
+        return {
+            uid = int.from_bytes(k[1:9],'big')
+            gid = int.from_bytes(k[9:17],'big')
+        }
+    elif k[0] == b'\x01':
+        return {
+            uid = int.from_bytes(k[1:9],'big')
+            gid = int.from_bytes(k[9:17],'big')
+            word = k[17:].decode('utf-8')
+        }
+
+def encode_op(op):
+    # input: (word, count)
+    #return op.count.to_bytes(2,'big') + b'\x00' if op.word is None else op.word.encode('utf-8') #null word byte
+    return op.count.to_bytes(2,'big') + b'' if op.word is None else op.word.encode('utf-8') #no word byte
+
+def decode_op(op):
+    #return Operation(None if op[2:] == b'\x00' else op[2:].decode('utf-8'), int.from_bytes(op[0:2],'big')) #null word byte
+    return Operation(None if len(op) == 2 else op[2:].decode('utf-8'), int.from_bytes(op[0:2],'big')) #no word byte
+
+class WumpusMerge(rocksdb.interfaces.MergeOperator):
+    #NECESSARY OPERATIONS TO DEFINE:
+    #1: Add word to BOM
+    #2: Add word to word obj
+    #OPERANDS: (word or bom, count)
+    #expressed in DB as 30-byte int big-endian + arbitrarily long utf8 word
+
+    def full_merge(key, existing, op_list):
+        #assumes that each thing is unique
+        if existing is not None:
+            l = json.loads(existing.decode('utf-8'))
+        else:
+            l = {}
+        for op in op_list:
+            op_d = decode_op(op)
+            if "total" in l: 
+                l["total"] += op.count
+            else:
+                l["total"] = op.count
+            if op.word in l["words"]:
+                l["words"][op.word] += op.count
+            else:
+                l["words"][op.word] = op.count
+        return (True,json.dumps(l).encode('utf-8'))
+
+
+    def partial_merge(key, left, right):
+        if left[2:] == right[2:]:
+            try:
+                c = (int.from_bytes(left[0:2],'big') + int.from_bytes(right[0:2],'big')).to_bytes(30,'big')
+                return (True,c+left[2:])
+            except OverflowError:
+                # we somehow overflowed the 2-byte count
+                return (False,None)
+        else:
+            return (False,None)
 
 class Wumpus(commands.Bot):
     #subclassing Bot so i can store my own properites
@@ -37,8 +114,9 @@ class Wumpus(commands.Bot):
         handler = logging.FileHandler(filename='wumpus.log', encoding='utf-8', mode='a')
         handler.setFormatter(logging.Formatter('%(asctime)s:%(levelname)s:%(name)s:%(lineno)d: %(message)s'))
         logger.addHandler(handler)
-        self.db_client = AsyncIOMotorClient()
-        self.db = self.db_client.wumpus
+        #self.db_client = AsyncIOMotorClient()
+        #self.db = self.db_client.wumpus
+        self.db = rocksdb.DB("wumpus.db", rocksdb.Options(create_if_missing=True,merge_operator=WumpusMerge))
         self.remove_command("help")
         self.add_command(build)
         #self.add_command(speak)
@@ -62,17 +140,17 @@ async def run(token):
         await ctx.bot.db.close()
         await wumpus.logout()
 
+
+
 # commands
 @commands.command()
 @commands.is_owner()
 async def build(ctx):
     #MOVE THIS TO ONGUILDJOIN WHEN DONE
-    #important: each member doesn't need guildid in the mem db, but does need it attached in mongo
-    #the mem db will be denormalized (embedded) to decrease in-memory footprint of the db
-    #while the mongo db is normalized (flattened) so as little disk data is read as possible
+    #NEW ROCKSDB KEY-VALUE FUNCTIONALITY INVOLVES TWO KINDS OF KEYS
     logger = logging.getLogger('wumpus')
     logger.info("Commanded to build on server {} named {}".format(ctx.guild.id, ctx.guild.name))
-    mem_db = {}
+    #mem_db = {}
     guild_id = ctx.guild.id
     save_name = "build_saves/{}.json".format(guild_id)
     try:
@@ -114,211 +192,63 @@ async def build(ctx):
             logger.info("Starting collection of channel {} named {}".format(channel.id, channel.name))
         if not channel.permissions_for(ctx.guild.get_member(ctx.bot.user.id)).read_messages:
             continue
-        counter_until_mem_check = 10
+        msgs_until_save = 50
         async for msg in channel.history(limit=None,before=start_at):
             logger.info("Working on message {} sent {}".format(msg.id, msg.created_at.isoformat()))
             user_id = msg.author.id
-            l = msg.clean_content.replace("derek","maya").replace("Derek","Maya").split()
+            l = msg.clean_content
+            for i, v in wumpus_config.replacements:
+                l = l.replace(i,v)
+            l = l.split()
             if len(l) == 0:
                 continue
-            if user_id not in mem_db:
-                mem_db[user_id] = {
-                    "total": 1,
-                    "bom": {},
-                    "words": {}
-                }
-            else:
-                mem_db[user_id]["total"] += 1
-            if l[0] not in mem_db[user_id]["bom"]:
-                mem_db[user_id]["bom"][l[0]] = 1
-            else:
-                mem_db[user_id]["bom"][l[0]] += 1
+            ctx.bot.db.merge(user_key(user_id,guild_id),encode_op((l[0],1))) #inc total and word count for first word in user object
             for index, word in enumerate(l):
-                if word not in mem_db[user_id]["words"]:
-                    mem_db[user_id]["words"][word] = {
-                        "total": 1,
-                        "next": {},
-                        "eom_count": 0
-                    }
-                else:
-                    mem_db[user_id]["words"][word]["total"] += 1
                 if index == len(l)-1:
-                    mem_db[user_id]["words"][word]["eom_count"] += 1
+                    nxt = None
                 else:
-                    if l[index+1] not in mem_db[user_id]["words"][word]["next"]:
-                        mem_db[user_id]["words"][word]["next"][l[index+1]] = 1
-                    else:
-                        mem_db[user_id]["words"][word]["next"][l[index+1]] += 1
-            counter_until_mem_check -= 1
+                    nxt = l[index+1]
+                ctx.bot.db.merge(word_key(user_id,guild_id,word),(nxt,1))
             save[channel.id]["message"] = msg.id
-            if counter_until_mem_check <= 0:
+            if msgs_until_save <= 0:
                 with open(save_name, 'w') as f:
                     json.dump(save, f)
-                this_process = psutil.Process(os.getpid())
-                if this_process.memory_info().rss >= TOTAL_MEMORY * (1/10): #1/10 FOR TESTING
-                    await dump_db(ctx.bot.db,mem_db,ctx.guild.id)
-                    with open(save_name, 'w') as f:
-                        json.dump(save, f)
-                counter_until_mem_check = 10
+                msgs_until_save = 50
         save[channel.id]["finished"] = True
-        
 
-
-async def dump_db(db,mem_db,guild_id):
-    for user_id, user in mem_db.items():
-        #await db.users.insert_one({
-        #    "user_id": user_id,
-        #    "guild_id": ctx.guild.id,
-        #    "total": 1,
-        #    "bom": bom_array
-        #})
-        logger = logging.getLogger("wumpus")
-        db_user = await db.users.find_one({"user_id":user_id,"guild_id":guild_id})
-        if db_user is None:
-            logger.info("User {} not found in database, assembling BOM collection and inserting".format(user_id))
-            bom_array = [{
-                "word": bom_word,
-                "freq": bom_freq
-            } for bom_word, bom_freq in user["bom"].items()]
-            await db.users.insert_one({
-                "user_id": user_id,
-                "guild_id": guild_id,
-                "total": user["total"],
-                "bom": bom_array
-            })
-        else:
-            #db_bom = db_user["bom"]
-            #for bom_word, bom_freq in user["bom"].items():
-            #    if bom_word in db_bom:
-            #        db_bom[bom_word] += bom_freq
-            #    else:
-            #        db_bom[bom_word] = bom_freq
-            #await db.users.update_one(
-            #    {
-            #    "user_id": msg.author.id,
-            #    "guild_id": msg.guild.id
-            #    },
-            #    {"$set": {"bom":db_bom}}
-            #)
-            # so i was going to do this by iterating over the user bom
-            # but i realized that's an O(n) lookup for every word in the bom table,
-            # since i have to walk through it over and over.
-            # therefore, i'm doing the two-step solution, and this shouldn't be too bad with
-            # a db that grows in O(log n) time:
-            # 1. walk throught the db's BOM array and increment and remove all words
-            # 2. push new words to the db
-            logger.info("User {} found in database, extracting BOM collection".format(user_id))
-            db_bom = db_user["bom"]
-            # update all existing values, iterating over the disk values
-            for db_bom_obj in db_bom:
-                logger.debug("Processing word {} from the database BOM collection".format(db_bom_obj["word"]))
-                if db_bom_obj["word"] in user["bom"]:
-                    logger.debug("Adding stored BOM frequency of word to database BOM collection")
-                    db_bom_obj["freq"] += user["bom"][db_bom_obj["word"]]
-                    del user["bom"][db_bom_obj["word"]]
-            #push all the new values
-            logger.info("Inserting all new words gathered for user {}".format(user_id))
-            db_bom.extend([{
-                "word": bom_word,
-                "freq": bom_freq
-            } for bom_word, bom_freq in user["bom"].items()])
-            await db.users.update_one({
-                "user_id": user_id,
-                "guild_id": guild_id,
-                },
-                {
-                "$set": {"bom":db_bom}, #i think taking the BOM out, manipulating in memory, and putting back is the best idea
-                "$inc": {"total":user["total"]}
-                })
-        del user["bom"] #gotta free that memory
-        #however, the words are going to be dealt with by the user dict
-        logger.info("Preparing to store body word counts for user {}".format(user_id))
-        for word_word, word_obj in user["words"].items():
-            logger.debug("Searching for word {}".format(word_word))
-            word_entry = await db.words.find_one({
-                "user_id": user_id,
-                "guild_id": guild_id,
-                "word": word_word
-            })
-            if word_entry is None:
-                logger.debug("Inserting new word document")
-                await db.words.insert_one({
-                    "user_id": user_id,
-                    "guild_id": guild_id,
-                    "word": word_word,
-                    "total": word_obj["total"],
-                    "next": [{"word":w,"freq":f} for w,f in word_obj["next"].items()],
-                    "eom_count": word_obj["eom_count"]
-                })
-            else:
-                logger.debug("Merging database and memory word objects")
-                #copypasting algorithm, heck this
-                db_next = word_entry["next"]
-                # update all existing values, iterating over the disk values
-                logger.debug("Updating all existing values retrieved from the database")
-                for db_next_obj in db_next:
-                    if db_next_obj["word"] in word_obj["next"]:
-                        db_next_obj["freq"] += word_obj["next"][db_next_obj["word"]]
-                        del word_obj["next"][db_next_obj["word"]]
-                #push all the new values
-                logger.debug("Pushing all new values to the database object")
-                db_next.extend([{
-                    "word": next_word,
-                    "freq": next_freq
-                } for next_word, next_freq in word_obj["next"].items()])
-                #update total at end
-                logger.debug("Updating actual database document")
-                await db.words.update_one({
-                    "user_id": user_id,
-                    "guild_id": guild_id,
-                    "word": word_word
-                    },
-                    {
-                    "$set": {"next":db_next},
-                    "$inc": {"total":word_obj["total"],"eom_count":word_obj["eom_count"]},
-                    }
-                )
-
-def markov_word(l, total):
+def markov_word(l):
     """expects a list of {word,freq} in l"""
-    #print(l)
+    #used to have a total parameter, redundant
     words = []
     freqs = []
+    total = 0
     for o in l:
-        #print("{};{}".format(o['word'],o['freq']))
         words.append(o['word'])
-        freqs.append(o['freq']/total)
-    n = random.random()
+        freqs.append(o['freq'])
+        total += o['freq']
+    n = random.random() * total
     c = 0
     for f in freqs:
-        #print("{}:{}".format(n,f))
         n -= f
         if n <= 0:
             break
         c += 1
-    #print(words[c])
     return words[c]
 
 @commands.command()
 async def speak(ctx, member : discord.Member):
-    user = await ctx.bot.db.users.find_one({"user_id": member.id})
-    if user is None:
-        await ctx.send("AAAAAAAAAA")
+    user_b = await ctx.bot.db.get(user_key(member.id,ctx.guild.id))
+    if user_b is None:
+        await ctx.send("No messages gauged.")
         return
-    this_bom_word = markov_word(user['bom'],user['total'])
-    #this_bom = random.choices(bom_words, weights=bom_freqs)
+    user = json.loads(user_b)
+    this_bom_word = markov_word(user['words']) #DO I EVEN NEED TOTALS?
     msg = this_bom_word
     current_word = await ctx.bot.db.words.find_one({
         "user_id": member.id,
         "word": this_bom_word
         })
     while True:
-        #next_words = [None]
-        #next_freqs = [current_word['eom_count']]
-        #for c in current_word['next']:
-        #    next_words.append(c['word'])
-        #    next_freqs.append(c['freq'])
-        #current_word = random.choices(next_words, next_freqs)
         if current_word['eom_count'] > 0:
             current_word['next'].append({'word': None, 'freq': current_word['eom_count']})
         next_word = markov_word(current_word['next'],current_word['total'])
