@@ -193,8 +193,9 @@ async def build(ctx):
         if not channel.permissions_for(ctx.guild.get_member(ctx.bot.user.id)).read_messages:
             continue
         msgs_until_save = 50
+        msg_count = 0
         async for msg in channel.history(limit=None,before=start_at):
-            logger.info("Working on message {} sent {}".format(msg.id, msg.created_at.isoformat()))
+            #logger.info("Working on message {} sent {}".format(msg.id, msg.created_at.isoformat()))
             user_id = msg.author.id
             l = msg.clean_content
             for i, v in wumpus_config.replacements:
@@ -210,7 +211,12 @@ async def build(ctx):
                     nxt = l[index+1]
                 ctx.bot.db.merge(word_key(user_id,guild_id,word),(nxt,1))
             save[channel.id]["message"] = msg.id
+            msg_count += 1
             if msgs_until_save <= 0:
+                logger.info("{} messages analyzed in channel {}, current message timestamp is {}".format(
+                    msg_count,
+                    channel.name,
+                    msg.created_at.isoformat()))
                 with open(save_name, 'w') as f:
                     json.dump(save, f)
                 msgs_until_save = 50
